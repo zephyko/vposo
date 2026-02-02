@@ -58,6 +58,7 @@ export type Database = {
           daily_generation_limit: number
           generation_count: number | null
           id: string
+          plan: Database["public"]["Enums"]["user_plan"]
           updated_at: string
           user_id: string
         }
@@ -66,6 +67,7 @@ export type Database = {
           daily_generation_limit?: number
           generation_count?: number | null
           id?: string
+          plan?: Database["public"]["Enums"]["user_plan"]
           updated_at?: string
           user_id: string
         }
@@ -74,6 +76,7 @@ export type Database = {
           daily_generation_limit?: number
           generation_count?: number | null
           id?: string
+          plan?: Database["public"]["Enums"]["user_plan"]
           updated_at?: string
           user_id?: string
         }
@@ -126,9 +129,17 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      get_plan_daily_limit: {
+        Args: { p_plan: Database["public"]["Enums"]["user_plan"] }
+        Returns: number
+      }
+      update_user_plan: {
+        Args: { new_plan: Database["public"]["Enums"]["user_plan"] }
+        Returns: undefined
+      }
     }
     Enums: {
+      user_plan: "free" | "creator" | "pro"
       voice_type: "cloned" | "designed" | "default"
     }
     CompositeTypes: {
@@ -257,6 +268,7 @@ export type CompositeTypes<
 export const Constants = {
   public: {
     Enums: {
+      user_plan: ["free", "creator", "pro"],
       voice_type: ["cloned", "designed", "default"],
     },
   },
