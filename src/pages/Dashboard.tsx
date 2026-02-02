@@ -6,6 +6,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { MyVoicesTab } from "@/components/dashboard/MyVoicesTab";
 import { DefaultVoicesTab } from "@/components/dashboard/DefaultVoicesTab";
 import { GenerateAudioTab } from "@/components/dashboard/GenerateAudioTab";
+import { PlanBadge } from "@/components/dashboard/PlanBadge";
 import { Mic2, Users, Wand2 } from "lucide-react";
 import { Voice } from "@/types/voice";
 
@@ -54,11 +55,14 @@ export default function Dashboard() {
 
       <div className="container mx-auto px-4 py-8">
         {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold mb-2">Voice Studio</h1>
-          <p className="text-muted-foreground">
-            Create, manage, and generate audio with your AI voices.
-          </p>
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">
+          <div>
+            <h1 className="text-3xl font-bold mb-2">Voice Studio</h1>
+            <p className="text-muted-foreground">
+              Create, manage, and generate audio with your AI voices.
+            </p>
+          </div>
+          <PlanBadge />
         </div>
 
         {/* Tabs */}
