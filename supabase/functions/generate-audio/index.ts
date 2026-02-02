@@ -4,11 +4,26 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { z } from "https://deno.land/x/zod@v3.22.4/mod.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
+
+// Allowed languages for validation
+const ALLOWED_LANGUAGES = ['auto', 'en', 'zh', 'ja', 'ko', 'es', 'fr', 'de', 'pt', 'ru', 'ar'] as const;
+
+// Input validation schema
+const RequestSchema = z.object({
+  voice_id: z.string().uuid('Invalid voice ID format'),
+  text: z.string()
+    .min(1, 'Text cannot be empty')
+    .max(5000, 'Text exceeds maximum length of 5000 characters')
+    .trim()
+    .refine(text => text.length > 0, 'Text cannot be only whitespace'),
+  language: z.enum(ALLOWED_LANGUAGES).optional().default('auto'),
+});
 
 // =============================================================================
 // TODO: QWEN3-TTS INTEGRATION
@@ -40,6 +55,7 @@ interface QwenTTSRequest {
 
 interface QwenTTSResponse {
   audio_url: string;
+  file_path: string;
   duration?: number;
 }
 
@@ -152,35 +168,43 @@ async function callQwenTTS(request: QwenTTSRequest): Promise<QwenTTSResponse> {
   const audioBuffer = await response.arrayBuffer();
   console.log("[Qwen TTS] Received audio data, size:", audioBuffer.byteLength, "bytes");
 
-  // Upload the audio to Supabase storage
+  // Upload the audio to Supabase storage using service role (for generated/ folder)
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
   const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   
+  // Create service role client for storage operations
+  const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
+  
   const fileName = `generated/${crypto.randomUUID()}.mp3`;
   
-  const uploadResponse = await fetch(
-    `${supabaseUrl}/storage/v1/object/audio/${fileName}`,
-    {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${supabaseServiceKey}`,
-        "Content-Type": "audio/mpeg",
-      },
-      body: audioBuffer,
-    }
-  );
+  // Upload file using Supabase SDK
+  const { error: uploadError } = await supabaseAdmin.storage
+    .from('audio')
+    .upload(fileName, audioBuffer, {
+      contentType: 'audio/mpeg',
+      upsert: false,
+    });
 
-  if (!uploadResponse.ok) {
-    const uploadError = await uploadResponse.text();
+  if (uploadError) {
     console.error("[Qwen TTS] Storage upload error:", uploadError);
-    throw new Error(`Failed to upload audio: ${uploadError}`);
+    throw new Error(`Failed to upload audio: ${uploadError.message}`);
   }
 
-  const audioUrl = `${supabaseUrl}/storage/v1/object/public/audio/${fileName}`;
-  console.log("[Qwen TTS] Audio uploaded successfully:", audioUrl);
+  // Generate a signed URL (valid for 1 hour) since bucket is now private
+  const { data: signedUrlData, error: signedUrlError } = await supabaseAdmin.storage
+    .from('audio')
+    .createSignedUrl(fileName, 3600); // 1 hour expiry
+
+  if (signedUrlError || !signedUrlData?.signedUrl) {
+    console.error("[Qwen TTS] Failed to create signed URL:", signedUrlError);
+    throw new Error(`Failed to create signed URL: ${signedUrlError?.message || 'Unknown error'}`);
+  }
+
+  console.log("[Qwen TTS] Audio uploaded successfully, signed URL generated");
 
   return {
-    audio_url: audioUrl,
+    audio_url: signedUrlData.signedUrl,
+    file_path: fileName, // Store file path for regenerating signed URLs later
     duration: Math.ceil(audioBuffer.byteLength / 16000), // Rough estimate
   };
 }
@@ -218,16 +242,33 @@ serve(async (req) => {
       });
     }
 
-    // Parse request body
-    const { voice_id, text, language } = await req.json();
-
-    if (!voice_id || !text) {
-      return new Response(JSON.stringify({ error: "Missing voice_id or text" }), {
+    // Parse and validate request body
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      return new Response(JSON.stringify({ error: "Invalid JSON body" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
+    const validation = RequestSchema.safeParse(body);
+    if (!validation.success) {
+      console.error("[Generate Audio] Validation failed:", validation.error.issues);
+      return new Response(
+        JSON.stringify({ 
+          error: "Validation failed", 
+          details: validation.error.issues.map(i => i.message) 
+        }), 
+        {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        }
+      );
+    }
+
+    const { voice_id, text, language } = validation.data;
     console.log(`[Generate Audio] User ${user.id} generating audio for voice ${voice_id}`);
 
     // Fetch the voice from the database
