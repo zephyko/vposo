@@ -4,18 +4,11 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { Voice, Generation, VoiceType, parseQwenParams, LANGUAGES } from "@/types/voice";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
-import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { Play, Pause, Download, Loader2, Wand2, Volume2 } from "lucide-react";
-import { format } from "date-fns";
+import { Loader2, Wand2 } from "lucide-react";
+import { ScriptInput } from "./generate-audio/ScriptInput";
+import { VoiceSelector } from "./generate-audio/VoiceSelector";
+import { ResultsSection, ResultsSectionRef } from "./generate-audio/ResultsSection";
 
 interface GenerateAudioTabProps {
   selectedVoice: Voice | null;
@@ -26,13 +19,12 @@ export function GenerateAudioTab({ selectedVoice, onVoiceChange }: GenerateAudio
   const { user } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const audioRef = useRef<HTMLAudioElement>(null);
-  
+  const resultsSectionRef = useRef<ResultsSectionRef>(null);
+
   const [text, setText] = useState("");
   const [language, setLanguage] = useState("auto");
   const [voiceId, setVoiceId] = useState(selectedVoice?.id || "");
   const [currentAudioUrl, setCurrentAudioUrl] = useState<string | null>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
 
   // Update voice selection when selectedVoice prop changes
   useEffect(() => {
@@ -45,7 +37,6 @@ export function GenerateAudioTab({ selectedVoice, onVoiceChange }: GenerateAudio
   const { data: allVoices } = useQuery({
     queryKey: ["all-voices", user?.id],
     queryFn: async () => {
-      // Fetch user's voices
       const { data: userVoices, error: userError } = await supabase
         .from("voices")
         .select("*")
@@ -53,7 +44,6 @@ export function GenerateAudioTab({ selectedVoice, onVoiceChange }: GenerateAudio
 
       if (userError) throw userError;
 
-      // Fetch default voices
       const { data: defaultVoices, error: defaultError } = await supabase
         .from("voices")
         .select("*")
@@ -62,9 +52,8 @@ export function GenerateAudioTab({ selectedVoice, onVoiceChange }: GenerateAudio
 
       if (defaultError) throw defaultError;
 
-      // Combine and transform
       const combined = [...(userVoices || []), ...(defaultVoices || [])];
-      return combined.map(voice => ({
+      return combined.map((voice) => ({
         ...voice,
         type: voice.type as VoiceType,
         qwen_params: parseQwenParams(voice.qwen_params),
@@ -85,14 +74,16 @@ export function GenerateAudioTab({ selectedVoice, onVoiceChange }: GenerateAudio
         .limit(10);
 
       if (error) throw error;
-      
-      return (data || []).map(gen => ({
+
+      return (data || []).map((gen) => ({
         ...gen,
-        voice: gen.voice ? {
-          ...gen.voice,
-          type: gen.voice.type as VoiceType,
-          qwen_params: parseQwenParams(gen.voice.qwen_params),
-        } : undefined,
+        voice: gen.voice
+          ? {
+              ...gen.voice,
+              type: gen.voice.type as VoiceType,
+              qwen_params: parseQwenParams(gen.voice.qwen_params),
+            }
+          : undefined,
       })) as Generation[];
     },
     enabled: !!user,
@@ -120,6 +111,11 @@ export function GenerateAudioTab({ selectedVoice, onVoiceChange }: GenerateAudio
       queryClient.invalidateQueries({ queryKey: ["recent-generations"] });
       setCurrentAudioUrl(data.audio_url);
       toast({ title: "Audio generated!", description: "Your audio is ready to play." });
+      
+      // Scroll to results section
+      setTimeout(() => {
+        resultsSectionRef.current?.scrollIntoView();
+      }, 100);
     },
     onError: (error: any) => {
       toast({
@@ -130,199 +126,82 @@ export function GenerateAudioTab({ selectedVoice, onVoiceChange }: GenerateAudio
     },
   });
 
-  const handlePlayPause = () => {
-    if (audioRef.current) {
-      if (isPlaying) {
-        audioRef.current.pause();
-      } else {
-        audioRef.current.play();
-      }
-      setIsPlaying(!isPlaying);
-    }
-  };
-
-  const handleDownload = () => {
-    if (currentAudioUrl) {
-      const a = document.createElement("a");
-      a.href = currentAudioUrl;
-      a.download = "voiso-audio.mp3";
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-    }
-  };
-
   const userVoices = allVoices?.filter((v) => v.user_id === user?.id) || [];
   const defaultVoices = allVoices?.filter((v) => v.user_id === null) || [];
+  const currentVoice = allVoices?.find((v) => v.id === voiceId);
+
+  const canGenerate = voiceId && text.trim().length > 0;
 
   return (
-    <div className="grid lg:grid-cols-3 gap-8">
-      {/* Main generation area */}
-      <div className="lg:col-span-2 space-y-6">
-        {/* Text input */}
-        <div className="space-y-2">
-          <Label htmlFor="text" className="text-base font-medium">
-            Text to convert to speech
-          </Label>
-          <Textarea
-            id="text"
-            placeholder="Enter the text you want to convert to speech..."
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            className="min-h-[200px] resize-none bg-muted/50"
-          />
-          <p className="text-sm text-muted-foreground">
-            {text.length} characters
-          </p>
+    <div className="grid lg:grid-cols-2 gap-8">
+      {/* Left: Script input */}
+      <div className="space-y-6">
+        <ScriptInput
+          text={text}
+          onChange={setText}
+          onClear={() => setText("")}
+          maxLength={5000}
+        />
+
+        {/* Generate button - visible on mobile */}
+        <div className="lg:hidden">
+          <Button
+            variant="glow"
+            size="lg"
+            onClick={() => generateMutation.mutate()}
+            disabled={generateMutation.isPending || !canGenerate}
+            className="w-full"
+          >
+            {generateMutation.isPending ? (
+              <Loader2 className="h-5 w-5 animate-spin" />
+            ) : (
+              <Wand2 className="h-5 w-5" />
+            )}
+            Generate audio
+          </Button>
         </div>
-
-        {/* Voice and language selectors */}
-        <div className="grid sm:grid-cols-2 gap-4">
-          <div className="space-y-2">
-            <Label htmlFor="voice">Voice</Label>
-            <Select value={voiceId} onValueChange={setVoiceId}>
-              <SelectTrigger className="bg-muted/50">
-                <SelectValue placeholder="Select a voice" />
-              </SelectTrigger>
-              <SelectContent>
-                {userVoices.length > 0 && (
-                  <>
-                    <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">
-                      My Voices
-                    </div>
-                    {userVoices.map((voice) => (
-                      <SelectItem key={voice.id} value={voice.id}>
-                        {voice.name} ({voice.type})
-                      </SelectItem>
-                    ))}
-                  </>
-                )}
-                {defaultVoices.length > 0 && (
-                  <>
-                    <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">
-                      Default Voices
-                    </div>
-                    {defaultVoices.map((voice) => (
-                      <SelectItem key={voice.id} value={voice.id}>
-                        {voice.name}
-                      </SelectItem>
-                    ))}
-                  </>
-                )}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="language">Language</Label>
-            <Select value={language} onValueChange={setLanguage}>
-              <SelectTrigger className="bg-muted/50">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {LANGUAGES.map((lang) => (
-                  <SelectItem key={lang.value} value={lang.value}>
-                    {lang.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-
-        {/* Generate button */}
-        <Button
-          variant="glow"
-          size="lg"
-          onClick={() => generateMutation.mutate()}
-          disabled={generateMutation.isPending || !voiceId || !text.trim()}
-          className="w-full sm:w-auto"
-        >
-          {generateMutation.isPending ? (
-            <Loader2 className="h-5 w-5 animate-spin" />
-          ) : (
-            <Wand2 className="h-5 w-5" />
-          )}
-          Generate audio
-        </Button>
-
-        {/* Audio player */}
-        {currentAudioUrl && (
-          <div className="glass-card rounded-xl p-6 space-y-4">
-            <div className="flex items-center gap-4">
-              <Button
-                variant="glow"
-                size="icon"
-                onClick={handlePlayPause}
-                className="h-14 w-14 rounded-full"
-              >
-                {isPlaying ? (
-                  <Pause className="h-6 w-6" />
-                ) : (
-                  <Play className="h-6 w-6 ml-1" />
-                )}
-              </Button>
-              <div className="flex-1">
-                <div className="flex items-center gap-1">
-                  {[...Array(30)].map((_, i) => (
-                    <div
-                      key={i}
-                      className="waveform-bar w-1 bg-primary/60"
-                      style={{
-                        height: `${Math.random() * 30 + 10}px`,
-                        animationDelay: `${i * 0.05}s`,
-                        animationPlayState: isPlaying ? "running" : "paused",
-                      }}
-                    />
-                  ))}
-                </div>
-              </div>
-              <Button variant="outline" size="icon" onClick={handleDownload}>
-                <Download className="h-4 w-4" />
-              </Button>
-            </div>
-            <audio
-              ref={audioRef}
-              src={currentAudioUrl}
-              onEnded={() => setIsPlaying(false)}
-              className="hidden"
-            />
-          </div>
-        )}
       </div>
 
-      {/* Recent generations sidebar */}
-      <div className="space-y-4">
-        <h3 className="font-semibold flex items-center gap-2">
-          <Volume2 className="h-4 w-4 text-primary" />
-          Recent Generations
-        </h3>
+      {/* Right: Voice selector + Results */}
+      <div className="space-y-8">
+        {/* Top-right: Voice selector */}
+        <div className="space-y-6">
+          <VoiceSelector
+            voiceId={voiceId}
+            language={language}
+            onVoiceChange={setVoiceId}
+            onLanguageChange={setLanguage}
+            userVoices={userVoices}
+            defaultVoices={defaultVoices}
+            selectedVoice={currentVoice}
+          />
 
-        {recentGenerations && recentGenerations.length > 0 ? (
-          <div className="space-y-3">
-            {recentGenerations.map((gen) => (
-              <div
-                key={gen.id}
-                className="glass-card rounded-lg p-4 space-y-2 hover:border-primary/50 transition-colors cursor-pointer"
-                onClick={() => {
-                  if (gen.audio_url) {
-                    setCurrentAudioUrl(gen.audio_url);
-                  }
-                }}
-              >
-                <p className="text-sm line-clamp-2">{gen.text}</p>
-                <div className="flex items-center justify-between text-xs text-muted-foreground">
-                  <span>{gen.voice?.name || "Unknown voice"}</span>
-                  <span>{format(new Date(gen.created_at), "MMM d, HH:mm")}</span>
-                </div>
-              </div>
-            ))}
+          {/* Generate button - desktop */}
+          <div className="hidden lg:block">
+            <Button
+              variant="glow"
+              size="lg"
+              onClick={() => generateMutation.mutate()}
+              disabled={generateMutation.isPending || !canGenerate}
+              className="w-full"
+            >
+              {generateMutation.isPending ? (
+                <Loader2 className="h-5 w-5 animate-spin" />
+              ) : (
+                <Wand2 className="h-5 w-5" />
+              )}
+              Generate audio
+            </Button>
           </div>
-        ) : (
-          <div className="glass-card rounded-lg p-6 text-center text-muted-foreground">
-            <p className="text-sm">No generations yet</p>
-          </div>
-        )}
+        </div>
+
+        {/* Bottom-right: Results */}
+        <ResultsSection
+          ref={resultsSectionRef}
+          currentAudioUrl={currentAudioUrl}
+          recentGenerations={recentGenerations || []}
+          onSelectGeneration={setCurrentAudioUrl}
+        />
       </div>
     </div>
   );
