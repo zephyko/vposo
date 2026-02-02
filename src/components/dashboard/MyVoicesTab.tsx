@@ -1,10 +1,12 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { Voice, VoiceType, parseQwenParams } from "@/types/voice";
 import { Button } from "@/components/ui/button";
 import { VoiceCard } from "@/components/voice/VoiceCard";
+import { VoiceFilters, VoiceTypeFilter } from "@/components/voice/VoiceFilters";
+import { RenameVoiceModal } from "@/components/voice/RenameVoiceModal";
 import { CloneVoiceModal } from "@/components/voice/CloneVoiceModal";
 import { DesignVoiceModal } from "@/components/voice/DesignVoiceModal";
 import { Mic2, Wand2, Plus, Loader2 } from "lucide-react";
@@ -18,8 +20,16 @@ export function MyVoicesTab({ onUseTTS }: MyVoicesTabProps) {
   const { user } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  
+  // Modal states
   const [cloneModalOpen, setCloneModalOpen] = useState(false);
   const [designModalOpen, setDesignModalOpen] = useState(false);
+  const [renameModalOpen, setRenameModalOpen] = useState(false);
+  const [selectedVoice, setSelectedVoice] = useState<Voice | null>(null);
+  
+  // Filter states
+  const [typeFilter, setTypeFilter] = useState<VoiceTypeFilter>("all");
+  const [searchQuery, setSearchQuery] = useState("");
 
   // Fetch user's voices
   const { data: voices, isLoading } = useQuery({
@@ -43,6 +53,30 @@ export function MyVoicesTab({ onUseTTS }: MyVoicesTabProps) {
     enabled: !!user,
   });
 
+  // Filter voices based on type and search
+  const filteredVoices = useMemo(() => {
+    if (!voices) return [];
+    
+    return voices.filter(voice => {
+      // Type filter
+      if (typeFilter !== "all" && voice.type !== typeFilter) {
+        return false;
+      }
+      
+      // Search filter
+      if (searchQuery.trim()) {
+        const query = searchQuery.toLowerCase();
+        const nameMatch = voice.name.toLowerCase().includes(query);
+        const descMatch = voice.description?.toLowerCase().includes(query) || false;
+        if (!nameMatch && !descMatch) {
+          return false;
+        }
+      }
+      
+      return true;
+    });
+  }, [voices, typeFilter, searchQuery]);
+
   // Delete voice mutation
   const deleteMutation = useMutation({
     mutationFn: async (voiceId: string) => {
@@ -58,8 +92,36 @@ export function MyVoicesTab({ onUseTTS }: MyVoicesTabProps) {
     },
   });
 
+  // Rename voice mutation
+  const renameMutation = useMutation({
+    mutationFn: async ({ voiceId, newName }: { voiceId: string; newName: string }) => {
+      const { error } = await supabase
+        .from("voices")
+        .update({ name: newName })
+        .eq("id", voiceId);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["my-voices"] });
+      toast({ title: "Voice renamed", description: "Your voice has been updated." });
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to rename voice.", variant: "destructive" });
+    },
+  });
+
   const handleVoiceCreated = () => {
     queryClient.invalidateQueries({ queryKey: ["my-voices"] });
+  };
+
+  const handleRename = (voice: Voice) => {
+    setSelectedVoice(voice);
+    setRenameModalOpen(true);
+  };
+
+  const handleRenameSubmit = async (newName: string) => {
+    if (!selectedVoice) return;
+    await renameMutation.mutateAsync({ voiceId: selectedVoice.id, newName });
   };
 
   if (isLoading) {
@@ -84,19 +146,39 @@ export function MyVoicesTab({ onUseTTS }: MyVoicesTabProps) {
         </Button>
       </div>
 
+      {/* Filters - only show if there are voices */}
+      {voices && voices.length > 0 && (
+        <VoiceFilters
+          typeFilter={typeFilter}
+          onTypeFilterChange={setTypeFilter}
+          searchQuery={searchQuery}
+          onSearchChange={setSearchQuery}
+        />
+      )}
+
       {/* Voices list */}
       {voices && voices.length > 0 ? (
-        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {voices.map((voice) => (
-            <VoiceCard
-              key={voice.id}
-              voice={voice}
-              onUseTTS={() => onUseTTS(voice)}
-              onDelete={() => deleteMutation.mutate(voice.id)}
-              showDelete
-            />
-          ))}
-        </div>
+        filteredVoices.length > 0 ? (
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {filteredVoices.map((voice) => (
+              <VoiceCard
+                key={voice.id}
+                voice={voice}
+                onUseTTS={() => onUseTTS(voice)}
+                onDelete={() => deleteMutation.mutate(voice.id)}
+                onRename={() => handleRename(voice)}
+                showMenu
+                showPreview
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="glass-card rounded-2xl p-8 text-center">
+            <p className="text-muted-foreground">
+              No voices match your filters. Try adjusting your search or filter criteria.
+            </p>
+          </div>
+        )
       ) : (
         <div className="glass-card rounded-2xl p-12 text-center">
           <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-4">
@@ -130,6 +212,14 @@ export function MyVoicesTab({ onUseTTS }: MyVoicesTabProps) {
         onOpenChange={setDesignModalOpen}
         onSuccess={handleVoiceCreated}
       />
+      {selectedVoice && (
+        <RenameVoiceModal
+          open={renameModalOpen}
+          onOpenChange={setRenameModalOpen}
+          currentName={selectedVoice.name}
+          onRename={handleRenameSubmit}
+        />
+      )}
     </div>
   );
 }

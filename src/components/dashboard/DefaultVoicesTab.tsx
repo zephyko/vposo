@@ -8,6 +8,29 @@ interface DefaultVoicesTabProps {
   onUseTTS: (voice: Voice) => void;
 }
 
+// Extract style tags from voice description or name
+function extractStyleTags(voice: Voice): string[] {
+  const tags: string[] = [];
+  
+  // Common style keywords to look for
+  const styleKeywords = [
+    "Warm", "Energetic", "Deep", "Calm", "Professional", 
+    "Friendly", "Authoritative", "Soothing", "Dynamic", "Neutral",
+    "Expressive", "Clear", "Rich", "Smooth", "Natural"
+  ];
+  
+  const text = `${voice.name} ${voice.description || ""}`.toLowerCase();
+  
+  styleKeywords.forEach(keyword => {
+    if (text.includes(keyword.toLowerCase())) {
+      tags.push(keyword);
+    }
+  });
+  
+  // Limit to 3 tags max
+  return tags.slice(0, 3);
+}
+
 export function DefaultVoicesTab({ onUseTTS }: DefaultVoicesTabProps) {
   // Fetch default voices (user_id is null)
   const { data: voices, isLoading } = useQuery({
@@ -39,6 +62,17 @@ export function DefaultVoicesTab({ onUseTTS }: DefaultVoicesTabProps) {
     );
   }
 
+  if (!voices || voices.length === 0) {
+    return (
+      <div className="glass-card rounded-2xl p-12 text-center">
+        <h3 className="text-xl font-semibold mb-2">No default voices available</h3>
+        <p className="text-muted-foreground">
+          Default voices will appear here once they are configured.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div className="mb-4">
@@ -49,12 +83,13 @@ export function DefaultVoicesTab({ onUseTTS }: DefaultVoicesTabProps) {
       </div>
 
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        {voices?.map((voice) => (
+        {voices.map((voice) => (
           <VoiceCard
             key={voice.id}
             voice={voice}
             onUseTTS={() => onUseTTS(voice)}
             showPreview
+            styleTags={extractStyleTags(voice)}
           />
         ))}
       </div>

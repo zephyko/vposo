@@ -2,30 +2,64 @@ import { useState, useRef } from "react";
 import { Voice } from "@/types/voice";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Play, Pause, Wand2, Trash2, Mic2, Palette, Loader2 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  Play,
+  Pause,
+  Wand2,
+  Mic2,
+  Palette,
+  Loader2,
+  MoreVertical,
+  Pencil,
+  Trash2,
+  Calendar,
+} from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { format } from "date-fns";
 
 interface VoiceCardProps {
   voice: Voice;
   onUseTTS: () => void;
   onDelete?: () => void;
-  showDelete?: boolean;
+  onRename?: () => void;
+  showMenu?: boolean;
   showPreview?: boolean;
+  styleTags?: string[];
 }
 
 export function VoiceCard({
   voice,
   onUseTTS,
   onDelete,
-  showDelete,
+  onRename,
+  showMenu,
   showPreview,
+  styleTags,
 }: VoiceCardProps) {
   const { toast } = useToast();
   const audioRef = useRef<HTMLAudioElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
 
   const handlePreview = async () => {
     // If we already have audio loaded, just play/pause
@@ -71,6 +105,7 @@ export function VoiceCard({
       setIsLoading(false);
     }
   };
+
   const getTypeIcon = () => {
     switch (voice.type) {
       case "cloned":
@@ -110,83 +145,151 @@ export function VoiceCard({
     return labels[lang] || lang;
   };
 
+  const handleDeleteConfirm = () => {
+    setDeleteDialogOpen(false);
+    onDelete?.();
+  };
+
   return (
-    <div className="glass-card rounded-xl p-5 group hover:border-primary/50 transition-all duration-200">
-      <div className="flex items-start justify-between mb-3">
-        <div className="flex items-center gap-3">
-          <div
-            className={`w-10 h-10 rounded-lg flex items-center justify-center ${getTypeColor()}`}
-          >
-            {getTypeIcon()}
+    <>
+      <div className="glass-card rounded-xl p-5 group hover:border-primary/50 transition-all duration-200">
+        <div className="flex items-start justify-between mb-3">
+          <div className="flex items-center gap-3">
+            <div
+              className={`w-10 h-10 rounded-lg flex items-center justify-center ${getTypeColor()}`}
+            >
+              {getTypeIcon()}
+            </div>
+            <div>
+              <h4 className="font-semibold">{voice.name}</h4>
+              <Badge variant="outline" className="text-xs capitalize">
+                {voice.type}
+              </Badge>
+            </div>
           </div>
-          <div>
-            <h4 className="font-semibold">{voice.name}</h4>
-            <Badge variant="outline" className="text-xs capitalize">
-              {voice.type}
-            </Badge>
-          </div>
+          {showMenu && (onDelete || onRename) && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="opacity-0 group-hover:opacity-100 transition-opacity h-8 w-8"
+                >
+                  <MoreVertical className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {onRename && (
+                  <DropdownMenuItem onClick={onRename}>
+                    <Pencil className="h-4 w-4 mr-2" />
+                    Rename
+                  </DropdownMenuItem>
+                )}
+                {onRename && onDelete && <DropdownMenuSeparator />}
+                {onDelete && (
+                  <DropdownMenuItem
+                    onClick={() => setDeleteDialogOpen(true)}
+                    className="text-destructive focus:text-destructive"
+                  >
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    Delete
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </div>
-        {showDelete && onDelete && (
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={onDelete}
-            className="opacity-0 group-hover:opacity-100 transition-opacity text-destructive hover:text-destructive hover:bg-destructive/10"
-          >
-            <Trash2 className="h-4 w-4" />
+
+        {voice.description && (
+          <p className="text-sm text-muted-foreground mb-3 line-clamp-2">
+            {voice.description}
+          </p>
+        )}
+
+        {/* Style tags for default voices */}
+        {styleTags && styleTags.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mb-3">
+            {styleTags.map((tag, index) => (
+              <Badge
+                key={index}
+                variant="secondary"
+                className="text-xs bg-accent/10 text-accent border-accent/20"
+              >
+                {tag}
+              </Badge>
+            ))}
+          </div>
+        )}
+
+        <div className="flex items-center gap-2 mb-4 flex-wrap">
+          <Badge variant="secondary" className="text-xs">
+            {getLanguageLabel(voice.language)}
+          </Badge>
+          {voice.created_at && (
+            <span className="text-xs text-muted-foreground flex items-center gap-1">
+              <Calendar className="h-3 w-3" />
+              {format(new Date(voice.created_at), "MMM d, yyyy")}
+            </span>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2">
+          {showPreview && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="flex-1"
+              onClick={handlePreview}
+              disabled={isLoading}
+            >
+              {isLoading ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : isPlaying ? (
+                <Pause className="h-3 w-3" />
+              ) : (
+                <Play className="h-3 w-3" />
+              )}
+              {isLoading ? "Loading..." : isPlaying ? "Pause" : "Preview"}
+            </Button>
+          )}
+          <Button variant="glow" size="sm" className="flex-1" onClick={onUseTTS}>
+            <Wand2 className="h-3 w-3" />
+            Use for TTS
           </Button>
+        </div>
+
+        {/* Hidden audio element for preview playback */}
+        {previewUrl && (
+          <audio
+            ref={audioRef}
+            src={previewUrl}
+            onEnded={() => setIsPlaying(false)}
+            className="hidden"
+          />
         )}
       </div>
 
-      {voice.description && (
-        <p className="text-sm text-muted-foreground mb-3 line-clamp-2">
-          {voice.description}
-        </p>
-      )}
-
-      <div className="flex items-center gap-2 mb-4">
-        <Badge variant="secondary" className="text-xs">
-          {getLanguageLabel(voice.language)}
-        </Badge>
-        <span className="text-xs text-muted-foreground">
-          {voice.source_model}
-        </span>
-      </div>
-
-      <div className="flex items-center gap-2">
-        {showPreview && (
-          <Button 
-            variant="outline" 
-            size="sm" 
-            className="flex-1"
-            onClick={handlePreview}
-            disabled={isLoading}
-          >
-            {isLoading ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
-            ) : isPlaying ? (
-              <Pause className="h-3 w-3" />
-            ) : (
-              <Play className="h-3 w-3" />
-            )}
-            {isLoading ? "Loading..." : isPlaying ? "Pause" : "Preview"}
-          </Button>
-        )}
-        <Button variant="glow" size="sm" className="flex-1" onClick={onUseTTS}>
-          <Wand2 className="h-3 w-3" />
-          Use for TTS
-        </Button>
-      </div>
-
-      {/* Hidden audio element for preview playback */}
-      {previewUrl && (
-        <audio
-          ref={audioRef}
-          src={previewUrl}
-          onEnded={() => setIsPlaying(false)}
-          className="hidden"
-        />
-      )}
-    </div>
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Voice</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete "{voice.name}"? This action cannot be
+              undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteConfirm}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }
