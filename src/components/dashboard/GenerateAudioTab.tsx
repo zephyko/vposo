@@ -2,13 +2,15 @@ import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
-import { Voice, Generation, VoiceType, parseQwenParams, LANGUAGES } from "@/types/voice";
+import { useQuota } from "@/hooks/useQuota";
+import { Voice, Generation, VoiceType, parseQwenParams } from "@/types/voice";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2, Wand2 } from "lucide-react";
 import { ScriptInput } from "./generate-audio/ScriptInput";
 import { VoiceSelector } from "./generate-audio/VoiceSelector";
 import { ResultsSection, ResultsSectionRef } from "./generate-audio/ResultsSection";
+import { QuotaIndicator } from "./generate-audio/QuotaIndicator";
 
 interface GenerateAudioTabProps {
   selectedVoice: Voice | null;
@@ -25,6 +27,9 @@ export function GenerateAudioTab({ selectedVoice, onVoiceChange }: GenerateAudio
   const [language, setLanguage] = useState("auto");
   const [voiceId, setVoiceId] = useState(selectedVoice?.id || "");
   const [currentAudioUrl, setCurrentAudioUrl] = useState<string | null>(null);
+
+  // Fetch quota information
+  const { data: quota, isLoading: quotaLoading } = useQuota();
 
   // Update voice selection when selectedVoice prop changes
   useEffect(() => {
@@ -105,10 +110,19 @@ export function GenerateAudioTab({ selectedVoice, onVoiceChange }: GenerateAudio
       });
 
       if (error) throw error;
+      
+      // Handle quota exceeded error from edge function
+      if (data?.error === "quota_exceeded") {
+        throw new Error(data.message || "Daily generation limit reached");
+      }
+      
       return data;
     },
     onSuccess: (data) => {
+      // Invalidate both generations and quota
       queryClient.invalidateQueries({ queryKey: ["recent-generations"] });
+      queryClient.invalidateQueries({ queryKey: ["quota"] });
+      
       setCurrentAudioUrl(data.audio_url);
       toast({ title: "Audio generated!", description: "Your audio is ready to play." });
       
@@ -130,7 +144,7 @@ export function GenerateAudioTab({ selectedVoice, onVoiceChange }: GenerateAudio
   const defaultVoices = allVoices?.filter((v) => v.user_id === null) || [];
   const currentVoice = allVoices?.find((v) => v.id === voiceId);
 
-  const canGenerate = voiceId && text.trim().length > 0;
+  const canGenerate = voiceId && text.trim().length > 0 && !quota?.isAtLimit;
 
   return (
     <div className="grid lg:grid-cols-2 gap-8">
@@ -142,6 +156,11 @@ export function GenerateAudioTab({ selectedVoice, onVoiceChange }: GenerateAudio
           onClear={() => setText("")}
           maxLength={5000}
         />
+
+        {/* Quota indicator - mobile */}
+        <div className="lg:hidden">
+          <QuotaIndicator quota={quota} isLoading={quotaLoading} />
+        </div>
 
         {/* Generate button - visible on mobile */}
         <div className="lg:hidden">
@@ -175,6 +194,11 @@ export function GenerateAudioTab({ selectedVoice, onVoiceChange }: GenerateAudio
             defaultVoices={defaultVoices}
             selectedVoice={currentVoice}
           />
+
+          {/* Quota indicator - desktop */}
+          <div className="hidden lg:block">
+            <QuotaIndicator quota={quota} isLoading={quotaLoading} />
+          </div>
 
           {/* Generate button - desktop */}
           <div className="hidden lg:block">

@@ -271,6 +271,66 @@ serve(async (req) => {
     const { voice_id, text, language } = validation.data;
     console.log(`[Generate Audio] User ${user.id} generating audio for voice ${voice_id}`);
 
+    // =========================================================================
+    // QUOTA CHECK: Verify user hasn't exceeded daily generation limit
+    // =========================================================================
+    
+    // Get user's profile with daily limit
+    const { data: profile, error: profileError } = await supabase
+      .from("profiles")
+      .select("daily_generation_limit")
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    if (profileError) {
+      console.error("[Generate Audio] Failed to fetch profile:", profileError);
+      return new Response(JSON.stringify({ error: "Failed to verify quota" }), {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const dailyLimit = profile?.daily_generation_limit ?? 20;
+    
+    // Count generations in the last 24 hours
+    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    
+    const { count: todayCount, error: countError } = await supabase
+      .from("generations")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", user.id)
+      .gte("created_at", twentyFourHoursAgo);
+
+    if (countError) {
+      console.error("[Generate Audio] Failed to count generations:", countError);
+      return new Response(JSON.stringify({ error: "Failed to verify quota" }), {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const usedCount = todayCount ?? 0;
+    console.log(`[Generate Audio] User ${user.id} has used ${usedCount}/${dailyLimit} generations today`);
+
+    if (usedCount >= dailyLimit) {
+      console.log(`[Generate Audio] User ${user.id} has reached daily limit`);
+      return new Response(
+        JSON.stringify({ 
+          error: "quota_exceeded",
+          message: "You've reached your daily generation limit. Upgrade your plan to generate more audio.",
+          usage: { used: usedCount, limit: dailyLimit }
+        }), 
+        {
+          status: 429,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        }
+      );
+    }
+
+    // =========================================================================
+    // VOICE FETCH & ACCESS CHECK
+    // =========================================================================
+
     // Fetch the voice from the database
     const { data: voice, error: voiceError } = await supabase
       .from("voices")
@@ -351,12 +411,12 @@ serve(async (req) => {
     }
 
     // Update user's generation count
-    const { error: countError } = await supabase.rpc("increment_generation_count", {
+    const { error: rpcError } = await supabase.rpc("increment_generation_count", {
       p_user_id: user.id,
     });
 
-    if (countError) {
-      console.log("[Generate Audio] Failed to update generation count (function may not exist):", countError.message);
+    if (rpcError) {
+      console.log("[Generate Audio] Failed to update generation count (function may not exist):", rpcError.message);
       // This is not critical, continue without failing
     }
 
