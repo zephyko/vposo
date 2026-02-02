@@ -24,7 +24,9 @@ const corsHeaders = {
 // - QWEN_API_KEY: Your API key for authentication
 // =============================================================================
 
-const QWEN_API_URL = Deno.env.get("QWEN_API_URL") || "https://placeholder-qwen-api.example.com/v1/tts";
+// Qwen3-TTS API configuration
+// The API follows the OpenAI Audio Speech API format at /v1/audio/speech
+const QWEN_API_URL = Deno.env.get("QWEN_API_URL") || "";
 const QWEN_API_KEY = Deno.env.get("QWEN_API_KEY") || "";
 
 interface QwenTTSRequest {
@@ -41,69 +43,134 @@ interface QwenTTSResponse {
   duration?: number;
 }
 
+// Map our language codes to Qwen3-TTS language format
+function mapLanguage(lang: string): string {
+  const languageMap: Record<string, string> = {
+    "auto": "Auto",
+    "en": "English",
+    "zh": "Chinese",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "es": "English", // Fallback for unsupported languages
+    "fr": "English",
+    "de": "English",
+    "pt": "English",
+    "ru": "English",
+    "ar": "English",
+  };
+  return languageMap[lang] || "Auto";
+}
+
 /**
  * Calls the Qwen3-TTS API to generate audio.
- * 
- * TODO: Implement this function with your actual Qwen3-TTS API.
- * 
- * The function should:
- * 1. Construct the appropriate request based on task_type
- * 2. Call the Qwen3-TTS API
- * 3. Return the generated audio URL
- * 
- * For now, this returns a mock audio URL.
+ * Uses the OpenAI-compatible /v1/audio/speech endpoint.
  */
 async function callQwenTTS(request: QwenTTSRequest): Promise<QwenTTSResponse> {
   console.log("[Qwen TTS] Generating audio with params:", JSON.stringify(request));
 
-  // =============================================================================
-  // TODO: REPLACE THIS MOCK WITH ACTUAL API CALL
-  // =============================================================================
-  // Example implementation for a real API:
-  //
-  // const response = await fetch(QWEN_API_URL, {
-  //   method: "POST",
-  //   headers: {
-  //     "Content-Type": "application/json",
-  //     "Authorization": `Bearer ${QWEN_API_KEY}`,
-  //   },
-  //   body: JSON.stringify({
-  //     task_type: request.task_type,
-  //     text: request.text,
-  //     language: request.language,
-  //     // For Base/CustomVoice tasks with cloned voices:
-  //     reference_audio_url: request.reference_audio_url,
-  //     // For VoiceDesign tasks:
-  //     voice_description: request.voice_description,
-  //     // For CustomVoice with predefined speakers:
-  //     speaker: request.speaker,
-  //   }),
-  // });
-  //
-  // if (!response.ok) {
-  //   const error = await response.text();
-  //   throw new Error(`Qwen TTS API error: ${response.status} - ${error}`);
-  // }
-  //
-  // const data = await response.json();
-  // return {
-  //   audio_url: data.audio_url,
-  //   duration: data.duration,
-  // };
-  // =============================================================================
+  if (!QWEN_API_URL) {
+    throw new Error("QWEN_API_URL is not configured. Please set it in your secrets.");
+  }
 
-  // Mock response - returns a sample audio file URL
-  // This simulates a successful API response
-  await new Promise((resolve) => setTimeout(resolve, 1000)); // Simulate API latency
+  // Build the API endpoint
+  const apiEndpoint = QWEN_API_URL.endsWith("/v1/audio/speech") 
+    ? QWEN_API_URL 
+    : `${QWEN_API_URL.replace(/\/$/, "")}/v1/audio/speech`;
 
-  // Using a placeholder audio URL (you can replace with any public audio file for testing)
-  const mockAudioUrl = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3";
+  // Build request body based on task type
+  const body: Record<string, unknown> = {
+    input: request.text,
+    response_format: "mp3",
+    task_type: request.task_type,
+    language: mapLanguage(request.language),
+    max_new_tokens: 4096,
+  };
+
+  // Add task-specific parameters
+  switch (request.task_type) {
+    case "CustomVoice":
+      // Use predefined speaker voice
+      body.voice = request.speaker || "Vivian";
+      if (request.voice_description) {
+        body.instructions = request.voice_description;
+      }
+      break;
+
+    case "VoiceDesign":
+      // Use natural language voice description
+      body.voice = "default";
+      if (request.voice_description) {
+        body.instructions = request.voice_description;
+      }
+      break;
+
+    case "Base":
+      // Voice cloning from reference audio
+      if (request.reference_audio_url) {
+        body.ref_audio = request.reference_audio_url;
+      }
+      body.voice = "clone";
+      break;
+  }
+
+  console.log("[Qwen TTS] Calling API:", apiEndpoint);
+  console.log("[Qwen TTS] Request body:", JSON.stringify(body));
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+
+  // Add authorization if API key is provided
+  if (QWEN_API_KEY) {
+    headers["Authorization"] = `Bearer ${QWEN_API_KEY}`;
+  }
+
+  const response = await fetch(apiEndpoint, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error("[Qwen TTS] API error:", response.status, errorText);
+    throw new Error(`Qwen TTS API error: ${response.status} - ${errorText}`);
+  }
+
+  // The API returns audio data directly, we need to upload it to storage
+  const audioBuffer = await response.arrayBuffer();
+  console.log("[Qwen TTS] Received audio data, size:", audioBuffer.byteLength, "bytes");
+
+  // Upload the audio to Supabase storage
+  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+  const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   
-  console.log("[Qwen TTS] Mock generation complete, returning:", mockAudioUrl);
+  const fileName = `generated/${crypto.randomUUID()}.mp3`;
   
+  const uploadResponse = await fetch(
+    `${supabaseUrl}/storage/v1/object/audio/${fileName}`,
+    {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${supabaseServiceKey}`,
+        "Content-Type": "audio/mpeg",
+      },
+      body: audioBuffer,
+    }
+  );
+
+  if (!uploadResponse.ok) {
+    const uploadError = await uploadResponse.text();
+    console.error("[Qwen TTS] Storage upload error:", uploadError);
+    throw new Error(`Failed to upload audio: ${uploadError}`);
+  }
+
+  const audioUrl = `${supabaseUrl}/storage/v1/object/public/audio/${fileName}`;
+  console.log("[Qwen TTS] Audio uploaded successfully:", audioUrl);
+
   return {
-    audio_url: mockAudioUrl,
-    duration: 30, // Mock duration in seconds
+    audio_url: audioUrl,
+    duration: Math.ceil(audioBuffer.byteLength / 16000), // Rough estimate
   };
 }
 
