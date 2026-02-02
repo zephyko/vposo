@@ -73,9 +73,20 @@ async function callQwenTTS(request: QwenTTSRequest): Promise<QwenTTSResponse> {
   }
 
   // Build the API endpoint
-  const apiEndpoint = QWEN_API_URL.endsWith("/v1/audio/speech") 
-    ? QWEN_API_URL 
-    : `${QWEN_API_URL.replace(/\/$/, "")}/v1/audio/speech`;
+  // Handle various URL formats:
+  // - Full endpoint: https://api.example.com/v1/audio/speech
+  // - Base with /v1: https://api.example.com/compatible-mode/v1
+  // - Base URL only: https://api.example.com
+  let apiEndpoint: string;
+  const normalizedUrl = QWEN_API_URL.replace(/\/$/, "");
+  
+  if (normalizedUrl.endsWith("/v1/audio/speech")) {
+    apiEndpoint = normalizedUrl;
+  } else if (normalizedUrl.endsWith("/v1")) {
+    apiEndpoint = `${normalizedUrl}/audio/speech`;
+  } else {
+    apiEndpoint = `${normalizedUrl}/v1/audio/speech`;
+  }
 
   // Build request body based on task type
   const body: Record<string, unknown> = {
