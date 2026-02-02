@@ -1,7 +1,10 @@
+import { useState, useRef } from "react";
 import { Voice } from "@/types/voice";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Play, Wand2, Trash2, Mic2, Palette } from "lucide-react";
+import { Play, Pause, Wand2, Trash2, Mic2, Palette, Loader2 } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
+import { useToast } from "@/hooks/use-toast";
 
 interface VoiceCardProps {
   voice: Voice;
@@ -18,6 +21,56 @@ export function VoiceCard({
   showDelete,
   showPreview,
 }: VoiceCardProps) {
+  const { toast } = useToast();
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+
+  const handlePreview = async () => {
+    // If we already have audio loaded, just play/pause
+    if (previewUrl && audioRef.current) {
+      if (isPlaying) {
+        audioRef.current.pause();
+        setIsPlaying(false);
+      } else {
+        audioRef.current.play();
+        setIsPlaying(true);
+      }
+      return;
+    }
+
+    // Generate a preview sample
+    setIsLoading(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("generate-audio", {
+        body: {
+          voice_id: voice.id,
+          text: "Hello, this is a preview of my voice. I hope you like how I sound!",
+          language: voice.language || "auto",
+        },
+      });
+
+      if (error) throw error;
+
+      setPreviewUrl(data.audio_url);
+      // Play the audio after a short delay for the element to update
+      setTimeout(() => {
+        if (audioRef.current) {
+          audioRef.current.play();
+          setIsPlaying(true);
+        }
+      }, 100);
+    } catch (error: any) {
+      toast({
+        title: "Preview failed",
+        description: error.message || "Could not generate preview",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
   const getTypeIcon = () => {
     switch (voice.type) {
       case "cloned":
@@ -102,9 +155,21 @@ export function VoiceCard({
 
       <div className="flex items-center gap-2">
         {showPreview && (
-          <Button variant="outline" size="sm" className="flex-1">
-            <Play className="h-3 w-3" />
-            Preview
+          <Button 
+            variant="outline" 
+            size="sm" 
+            className="flex-1"
+            onClick={handlePreview}
+            disabled={isLoading}
+          >
+            {isLoading ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : isPlaying ? (
+              <Pause className="h-3 w-3" />
+            ) : (
+              <Play className="h-3 w-3" />
+            )}
+            {isLoading ? "Loading..." : isPlaying ? "Pause" : "Preview"}
           </Button>
         )}
         <Button variant="glow" size="sm" className="flex-1" onClick={onUseTTS}>
@@ -112,6 +177,16 @@ export function VoiceCard({
           Use for TTS
         </Button>
       </div>
+
+      {/* Hidden audio element for preview playback */}
+      {previewUrl && (
+        <audio
+          ref={audioRef}
+          src={previewUrl}
+          onEnded={() => setIsPlaying(false)}
+          className="hidden"
+        />
+      )}
     </div>
   );
 }
