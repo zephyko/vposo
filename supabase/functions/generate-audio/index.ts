@@ -40,9 +40,9 @@ const RequestSchema = z.object({
 // =============================================================================
 
 // Qwen3-TTS API configuration
-// The API follows the OpenAI Audio Speech API format at /v1/audio/speech
-const QWEN_API_URL = Deno.env.get("QWEN_API_URL") || "";
-const QWEN_API_KEY = Deno.env.get("QWEN_API_KEY") || "";
+// First checks user_settings table, falls back to environment variables
+const DEFAULT_QWEN_API_URL = Deno.env.get("QWEN_API_URL") || "";
+const DEFAULT_QWEN_API_KEY = Deno.env.get("QWEN_API_KEY") || "";
 
 interface QwenTTSRequest {
   task_type: "Base" | "CustomVoice" | "VoiceDesign";
@@ -81,11 +81,11 @@ function mapLanguage(lang: string): string {
  * Calls the Qwen3-TTS API to generate audio.
  * Uses the OpenAI-compatible /v1/audio/speech endpoint.
  */
-async function callQwenTTS(request: QwenTTSRequest): Promise<QwenTTSResponse> {
+async function callQwenTTS(request: QwenTTSRequest, apiUrl: string, apiKey: string): Promise<QwenTTSResponse> {
   console.log("[Qwen TTS] Generating audio with params:", JSON.stringify(request));
 
-  if (!QWEN_API_URL) {
-    throw new Error("QWEN_API_URL is not configured. Please set it in your secrets.");
+  if (!apiUrl) {
+    throw new Error("Qwen API URL is not configured. Please set it in Settings.");
   }
 
   // Build the API endpoint
@@ -94,7 +94,7 @@ async function callQwenTTS(request: QwenTTSRequest): Promise<QwenTTSResponse> {
   // - Base with /v1: https://api.example.com/compatible-mode/v1
   // - Base URL only: https://api.example.com
   let apiEndpoint: string;
-  const normalizedUrl = QWEN_API_URL.replace(/\/$/, "");
+  const normalizedUrl = apiUrl.replace(/\/$/, "");
   
   if (normalizedUrl.endsWith("/v1/audio/speech")) {
     apiEndpoint = normalizedUrl;
@@ -148,8 +148,8 @@ async function callQwenTTS(request: QwenTTSRequest): Promise<QwenTTSResponse> {
   };
 
   // Add authorization if API key is provided
-  if (QWEN_API_KEY) {
-    headers["Authorization"] = `Bearer ${QWEN_API_KEY}`;
+  if (apiKey) {
+    headers["Authorization"] = `Bearer ${apiKey}`;
   }
 
   const response = await fetch(apiEndpoint, {
@@ -328,6 +328,39 @@ serve(async (req) => {
     }
 
     // =========================================================================
+    // FETCH USER SETTINGS FOR QWEN API CONFIG
+    // =========================================================================
+    
+    const { data: userSettings, error: settingsError } = await supabase
+      .from("user_settings")
+      .select("qwen_api_base_url, qwen_api_key")
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    if (settingsError) {
+      console.error("[Generate Audio] Failed to fetch user settings:", settingsError);
+    }
+
+    // Use user settings if available, otherwise fall back to environment variables
+    const qwenApiUrl = userSettings?.qwen_api_base_url || DEFAULT_QWEN_API_URL;
+    const qwenApiKey = userSettings?.qwen_api_key || DEFAULT_QWEN_API_KEY;
+
+    // Check if API is configured
+    if (!qwenApiUrl) {
+      console.log("[Generate Audio] Qwen API not configured for user", user.id);
+      return new Response(
+        JSON.stringify({ 
+          error: "api_not_configured",
+          message: "Qwen API is not configured. Please add your API URL and key in Settings."
+        }), 
+        {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        }
+      );
+    }
+
+    // =========================================================================
     // VOICE FETCH & ACCESS CHECK
     // =========================================================================
 
@@ -389,8 +422,8 @@ serve(async (req) => {
         break;
     }
 
-    // Call Qwen TTS API
-    const ttsResponse = await callQwenTTS(ttsRequest);
+    // Call Qwen TTS API with user's configured credentials
+    const ttsResponse = await callQwenTTS(ttsRequest, qwenApiUrl, qwenApiKey);
 
     // Save the generation to the database
     const { data: generation, error: genError } = await supabase
