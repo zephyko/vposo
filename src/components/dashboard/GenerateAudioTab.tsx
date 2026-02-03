@@ -1,12 +1,15 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useQuota } from "@/hooks/useQuota";
+import { useSettings } from "@/hooks/useSettings";
 import { Voice, Generation, VoiceType, parseQwenParams } from "@/types/voice";
 import { Button } from "@/components/ui/button";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, Wand2 } from "lucide-react";
+import { Loader2, Wand2, AlertTriangle, Settings } from "lucide-react";
 import { ScriptInput } from "./generate-audio/ScriptInput";
 import { VoiceSelector } from "./generate-audio/VoiceSelector";
 import { ResultsSection, ResultsSectionRef } from "./generate-audio/ResultsSection";
@@ -28,8 +31,9 @@ export function GenerateAudioTab({ selectedVoice, onVoiceChange }: GenerateAudio
   const [voiceId, setVoiceId] = useState(selectedVoice?.id || "");
   const [currentAudioUrl, setCurrentAudioUrl] = useState<string | null>(null);
 
-  // Fetch quota information
+  // Fetch quota and settings information
   const { data: quota, isLoading: quotaLoading } = useQuota();
+  const { isConfigured, isLoading: settingsLoading } = useSettings();
 
   // Update voice selection when selectedVoice prop changes
   useEffect(() => {
@@ -144,18 +148,37 @@ export function GenerateAudioTab({ selectedVoice, onVoiceChange }: GenerateAudio
   const defaultVoices = allVoices?.filter((v) => v.user_id === null) || [];
   const currentVoice = allVoices?.find((v) => v.id === voiceId);
 
-  const canGenerate = voiceId && text.trim().length > 0 && !quota?.isAtLimit;
+  const canGenerate = voiceId && text.trim().length > 0 && !quota?.isAtLimit && isConfigured;
 
   return (
-    <div className="grid lg:grid-cols-2 gap-8">
-      {/* Left: Script input */}
-      <div className="space-y-6">
-        <ScriptInput
-          text={text}
-          onChange={setText}
-          onClear={() => setText("")}
-          maxLength={5000}
-        />
+    <div className="space-y-6">
+      {/* Settings Warning Banner */}
+      {!settingsLoading && !isConfigured && (
+        <Alert className="border-warning/50 bg-warning/10">
+          <AlertTriangle className="h-4 w-4 text-warning" />
+          <AlertDescription className="flex items-center justify-between gap-4 text-warning">
+            <span>
+              Qwen backend not configured yet. Please add your Qwen API URL and key in Settings.
+            </span>
+            <Button variant="outline" size="sm" asChild className="shrink-0">
+              <Link to="/settings">
+                <Settings className="h-4 w-4 mr-2" />
+                Configure
+              </Link>
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      <div className="grid lg:grid-cols-2 gap-8">
+        {/* Left: Script input */}
+        <div className="space-y-6">
+          <ScriptInput
+            text={text}
+            onChange={setText}
+            onClear={() => setText("")}
+            maxLength={5000}
+          />
 
         {/* Quota indicator - mobile */}
         <div className="lg:hidden">
@@ -227,6 +250,7 @@ export function GenerateAudioTab({ selectedVoice, onVoiceChange }: GenerateAudio
           onSelectGeneration={setCurrentAudioUrl}
         />
       </div>
+    </div>
     </div>
   );
 }
